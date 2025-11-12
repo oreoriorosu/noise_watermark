@@ -32,6 +32,10 @@
       <label style="margin-left:8px">除去法: <select id="removeMethod"><option value="simple">単純減算 (既知)</option><option value="ls">相関推定 (LS)</option></select></label>
       <button id="subtractBtn" style="margin-left:8px">ノイズ無視で減算テスト</button>
       <span id="subtractResult" style="margin-left:8px"></span>
+      <div style="margin-top:8px">
+        <label><input type="checkbox" id="skipWhite"> 白飛び領域では減算を行わない</label>
+        <label style="margin-left:12px">白閾値: <input id="whiteThreshold" type="range" min="200" max="255" step="1" value="250"> <span id="whiteThresholdValue">250</span></label>
+      </div>
     </div>
   </div>
 </div>
@@ -59,6 +63,11 @@ const wmPos = document.getElementById('wmPos');
 const previewMaskBtn = document.getElementById('previewMaskBtn');
 const subtractBtn = document.getElementById('subtractBtn');
 const subtractResult = document.getElementById('subtractResult');
+const skipWhite = document.getElementById('skipWhite');
+const whiteThreshold = document.getElementById('whiteThreshold');
+const whiteThresholdValue = document.getElementById('whiteThresholdValue');
+whiteThresholdValue.textContent = whiteThreshold.value;
+whiteThreshold.addEventListener('input', () => { whiteThresholdValue.textContent = whiteThreshold.value; });
 
 wmScaleValue.textContent = wmScale.value;
 wmScale.addEventListener('input', () => { wmScaleValue.textContent = wmScale.value; });
@@ -98,7 +107,7 @@ subtractBtn.addEventListener('click', () => {
   let diffSum = 0;
   const method = document.getElementById('removeMethod').value;
   if(method === 'simple'){
-    for(let y=0;y<h;y++){
+        for(let y=0;y<h;y++){
       const gy = (y/(h-1));
       const gradFactor = (gy - 0.5) * 2 * parseFloat(document.getElementById('gradStrength').value);
       for(let x=0;x<w;x++){
@@ -107,7 +116,15 @@ subtractBtn.addEventListener('click', () => {
         const gwm = wmDataGlobal.data[i+1]/255;
         const bwm = wmDataGlobal.data[i+2]/255;
         const awm = wmDataGlobal.data[i+3]/255;
-        if(awm < parseFloat(alphaSlider.value)) continue;
+            if(awm < parseFloat(alphaSlider.value)) continue;
+            // skip subtraction on white (blown) areas if enabled
+            if(skipWhite && skipWhite.checked){
+              const thr = parseInt(whiteThreshold.value, 10);
+              const or = originalBaseImageData.data[i];
+              const og = originalBaseImageData.data[i+1];
+              const ob = originalBaseImageData.data[i+2];
+              if(or >= thr && og >= thr && ob >= thr) continue;
+            }
         const wmLum = (0.299*rwm + 0.587*gwm + 0.114*bwm) * awm;
         const wmStrength = parseFloat(document.getElementById('wmStrength').value);
         const deltaEst = (wmLum * (1 + gradFactor)) * wmStrength; // estimate without noise
@@ -132,6 +149,14 @@ subtractBtn.addEventListener('click', () => {
         const bwm = wmDataGlobal.data[i+2]/255;
         const awm = wmDataGlobal.data[i+3]/255;
         if(awm < parseFloat(alphaSlider.value)) continue;
+        // skip subtraction on white (blown) areas if enabled
+        if(skipWhite && skipWhite.checked){
+          const thr = parseInt(whiteThreshold.value, 10);
+          const or = originalBaseImageData.data[i];
+          const og = originalBaseImageData.data[i+1];
+          const ob = originalBaseImageData.data[i+2];
+          if(or >= thr && og >= thr && ob >= thr) continue;
+        }
         const wmLum = (0.299*rwm + 0.587*gwm + 0.114*bwm) * awm;
         const M = (wmLum * (1 + gradFactor));
         const D = (cur.data[i] - originalBaseImageData.data[i]) / 255.0; // normalize
