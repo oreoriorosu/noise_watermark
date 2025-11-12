@@ -9,6 +9,10 @@
   canvas{max-width:100%;border:1px solid #ccc;display:block;margin-top:8px}
   label{display:block;margin-top:8px}
   .controls{max-width:900px}
+  /* loading overlay */
+  .loading-overlay{position:fixed;left:0;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.6);z-index:9999;visibility:hidden;}
+  .spinner{width:48px;height:48px;border:6px solid #ddd;border-top-color:#333;border-radius:50%;animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -40,6 +44,9 @@
   </div>
 </div>
 
+<!-- loading overlay (shared) -->
+<div id="loadingOverlay" class="loading-overlay" aria-hidden="true"><div class="spinner" role="status" aria-label="loading"></div></div>
+
 <canvas id="outCanvas"></canvas>
 
 <script>
@@ -68,6 +75,18 @@ const whiteThreshold = document.getElementById('whiteThreshold');
 const whiteThresholdValue = document.getElementById('whiteThresholdValue');
 whiteThresholdValue.textContent = whiteThreshold.value;
 whiteThreshold.addEventListener('input', () => { whiteThresholdValue.textContent = whiteThreshold.value; });
+const loadingOverlay = document.getElementById('loadingOverlay');
+
+function showLoading(){
+  if(!loadingOverlay) return;
+  loadingOverlay.style.visibility = 'visible';
+  loadingOverlay.setAttribute('aria-hidden','false');
+}
+function hideLoading(){
+  if(!loadingOverlay) return;
+  loadingOverlay.style.visibility = 'hidden';
+  loadingOverlay.setAttribute('aria-hidden','true');
+}
 
 wmScaleValue.textContent = wmScale.value;
 wmScale.addEventListener('input', () => { wmScaleValue.textContent = wmScale.value; });
@@ -228,99 +247,103 @@ function generateNoise(width, height){
   return arr;
 }
 
-function applyWatermark() {
+// global watermark image data (full-canvas sized ImageData)
+let wmDataGlobal = null;
+
+applyBtn.addEventListener('click', () => {
   if(!baseImg){ alert('元画像を選択してください'); return; }
-  const wmStrength = parseFloat(document.getElementById('wmStrength').value);
-  const noiseStrength = parseFloat(document.getElementById('noiseStrength').value);
-  const gradStrength = parseFloat(document.getElementById('gradStrength').value);
-  const alphaThreshold = parseFloat(document.getElementById('alphaThreshold').value);
+  if(!wmImg){ alert('透かし画像を選択してください'); return; }
+  // set canvas to base image size
+  canvas.width = baseImg.naturalWidth || baseImg.width;
+  canvas.height = baseImg.naturalHeight || baseImg.height;
+  ctx.clearRect(0,0,canvas.width, canvas.height);
+  ctx.drawImage(baseImg, 0, 0, canvas.width, canvas.height);
+  // save original image data for subtraction tests
+  originalBaseImageData = ctx.getImageData(0,0,canvas.width, canvas.height);
 
-  canvas.width = baseImg.width;
-  canvas.height = baseImg.height;
-  ctx.drawImage(baseImg, 0, 0);
+  // prepare watermark image drawn onto an offscreen canvas the same size as base
+  const off = document.createElement('canvas');
+  off.width = canvas.width; off.height = canvas.height;
+  const octx = off.getContext('2d');
+  octx.clearRect(0,0,off.width, off.height);
 
-  const baseData = ctx.getImageData(0,0,canvas.width,canvas.height);
-  // save original base image data for subtract test
-  originalBaseImageData = ctx.getImageData(0,0,canvas.width,canvas.height);
+  // compute scale and position
+  const scalePct = parseFloat(wmScale.value) / 100.0;
+  let drawW = Math.round(wmImg.naturalWidth * scalePct);
+  let drawH = Math.round(wmImg.naturalHeight * scalePct);
+  // if auto, downscale to fit inside base without upscaling unless >100%
+  if(wmAuto.checked){
+    const maxW = Math.round(canvas.width * 0.9);
+    const maxH = Math.round(canvas.height * 0.9);
+    const fit = Math.min(maxW / wmImg.naturalWidth, maxH / wmImg.naturalHeight, 1.0);
+    drawW = Math.round(wmImg.naturalWidth * fit * (parseFloat(wmScale.value) / 100.0));
+    drawH = Math.round(wmImg.naturalHeight * fit * (parseFloat(wmScale.value) / 100.0));
+  }
+
+  // position
+  let dx = 0, dy = 0;
+  const pos = wmPos.value;
+  if(pos === 'center'){
+    dx = Math.round((canvas.width - drawW) / 2);
+    dy = Math.round((canvas.height - drawH) / 2);
+  } else if(pos === 'top-left'){
+    dx = 0; dy = 0;
+  } else if(pos === 'top-right'){
+    dx = canvas.width - drawW; dy = 0;
+  } else if(pos === 'bottom-left'){
+    dx = 0; dy = canvas.height - drawH;
+  } else if(pos === 'bottom-right'){
+    dx = canvas.width - drawW; dy = canvas.height - drawH;
+  }
+
+  // draw watermark onto offscreen and read its pixels into wmDataGlobal
+  octx.drawImage(wmImg, dx, dy, drawW, drawH);
+  wmDataGlobal = octx.getImageData(0,0,off.width, off.height);
+
+  // apply watermark (additive noise + luminance mask)
   const w = canvas.width, h = canvas.height;
-
-  let wmCanvas = document.createElement('canvas');
-  wmCanvas.width = w; wmCanvas.height = h;
-  let wctx = wmCanvas.getContext('2d');
-  if(wmImg) {
-    // 透かし画像のサイズ/位置を dev UI に従って決定（デフォルトは自動縮小して中央）
-    const srcW = wmImg.width;
-    const srcH = wmImg.height;
-    let scale = 1;
-    if(wmAuto && wmAuto.checked){
-      scale = Math.min(1, w / srcW, h / srcH); // 自動: 拡大しないで収まる最大値
-    } else if(wmScale){
-      // allow manual scaling above 100% (e.g., 150% -> 1.5)
-      scale = parseFloat(wmScale.value) / 100;
-    }
-    const drawW = Math.round(srcW * scale);
-    const drawH = Math.round(srcH * scale);
-    let dx = Math.floor((w - drawW) / 2);
-    let dy = Math.floor((h - drawH) / 2);
-    if(wmPos){
-      const pos = wmPos.value || 'center';
-      if(pos === 'top-left'){ dx = 0; dy = 0; }
-      else if(pos === 'top-right'){ dx = w - drawW; dy = 0; }
-      else if(pos === 'bottom-left'){ dx = 0; dy = h - drawH; }
-      else if(pos === 'bottom-right'){ dx = w - drawW; dy = h - drawH; }
-      // center is default
-    }
-    wctx.clearRect(0,0,w,h);
-    wctx.drawImage(wmImg, dx, dy, drawW, drawH);
-  }
-  else {
-    wctx.fillStyle = 'rgba(255,255,255,0)';
-    wctx.fillRect(0,0,w,h);
-    wctx.fillStyle = '#ffffff';
-    wctx.globalAlpha = 0.2;
-    wctx.beginPath();
-    wctx.arc(w/2,h/2,Math.min(w,h)/4,0,Math.PI*2);
-    wctx.fill();
-    wctx.globalAlpha = 1;
-  }
-  const wmData = wctx.getImageData(0,0,w,h);
-  // expose watermark data for dev tools (preview/subtract)
-  window.wmDataGlobal = wmData;
+  const data = ctx.getImageData(0,0,w,h);
   const noise = generateNoise(w,h);
-  const out = baseData;
+  const wmStrengthVal = parseFloat(document.getElementById('wmStrength').value);
+  const noiseStrengthVal = parseFloat(document.getElementById('noiseStrength').value);
+  const gradStrengthVal = parseFloat(document.getElementById('gradStrength').value);
+  const alphaThr = parseFloat(alphaSlider.value);
 
   for(let y=0;y<h;y++){
     const gy = (y/(h-1));
-    const gradFactor = (gy - 0.5) * 2 * gradStrength;
+    const gradFactor = (gy - 0.5) * 2 * gradStrengthVal;
     for(let x=0;x<w;x++){
       const i = (y*w + x)*4;
-  const rwm = wmData.data[i]/255;
-  const gwm = wmData.data[i+1]/255;
-  const bwm = wmData.data[i+2]/255;
-  const awm = wmData.data[i+3]/255; // 透過（アルファ）を反映
-  // 透過部分は処理しない（UIで調整可能な閾値でスキップ）
-  if (awm < alphaThreshold) continue;
-  const wmLum = (0.299*rwm + 0.587*gwm + 0.114*bwm) * awm;
-  const n = noise[y*w + x];
-  // ノイズもアルファに依存させ、透過部にはノイズが乗らないようにする
-  const delta = (wmLum * (1 + gradFactor) + n * noiseStrength * awm) * wmStrength;
-      out.data[i  ] = Math.max(0, Math.min(255, out.data[i  ] + delta * 255));
-      out.data[i+1] = Math.max(0, Math.min(255, out.data[i+1] + delta * 255));
-      out.data[i+2] = Math.max(0, Math.min(255, out.data[i+2] + delta * 255));
+      const rwm = wmDataGlobal.data[i] / 255;
+      const gwm = wmDataGlobal.data[i+1] / 255;
+      const bwm = wmDataGlobal.data[i+2] / 255;
+      const awm = wmDataGlobal.data[i+3] / 255;
+      if(awm < alphaThr) continue; // respect transparency
+      const wmLum = (0.299*rwm + 0.587*gwm + 0.114*bwm) * awm;
+      const noiseVal = noise[y*w + x];
+      const delta = (wmLum * (1 + gradFactor)) * wmStrengthVal + noiseVal * noiseStrengthVal;
+      // add delta to RGB channels
+      data.data[i  ] = Math.max(0, Math.min(255, data.data[i  ] + delta*255));
+      data.data[i+1] = Math.max(0, Math.min(255, data.data[i+1] + delta*255));
+      data.data[i+2] = Math.max(0, Math.min(255, data.data[i+2] + delta*255));
     }
   }
-  ctx.putImageData(out,0,0);
-}
+  ctx.putImageData(data, 0, 0);
+  // ensure preview canvas reflects latest
+  if(!previewAdded){ canvas.parentNode.appendChild(previewCanvas); previewAdded = true; }
+  previewCanvas.width = w; previewCanvas.height = h;
+  previewCanvas.getContext('2d').putImageData(ctx.getImageData(0,0,w,h),0,0);
+  alert('透かしを適用しました。減算テストのために「ノイズ無視で減算テスト」を使ってください。');
+});
 
-applyBtn.addEventListener('click', applyWatermark);
 downloadBtn.addEventListener('click', () => {
-  if(canvas.width===0) return;
+  if(!canvas) return;
   const url = canvas.toDataURL('image/png');
   const a = document.createElement('a');
-  a.download = 'watermarked.png';
-  a.href = url;
-  a.click();
+  a.href = url; a.download = 'watermarked.png';
+  document.body.appendChild(a); a.click(); a.remove();
 });
+
 </script>
 </body>
 </html>
