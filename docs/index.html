@@ -88,6 +88,11 @@ function hideLoading(){
   loadingOverlay.setAttribute('aria-hidden','true');
 }
 
+// yield so the browser can render the loading overlay during heavy work
+function yieldFrame(){
+  return new Promise(resolve => requestAnimationFrame(() => resolve()));
+}
+
 wmScaleValue.textContent = wmScale.value;
 wmScale.addEventListener('input', () => { wmScaleValue.textContent = wmScale.value; });
 
@@ -116,109 +121,118 @@ previewMaskBtn.addEventListener('click', () => {
   if(!previewAdded){ canvas.parentNode.appendChild(previewCanvas); previewAdded = true; }
 });
 
-subtractBtn.addEventListener('click', () => {
+subtractBtn.addEventListener('click', async () => {
   if(!originalBaseImageData) { alert('まず「透かしを適用」して元画像データを保存してください'); return; }
   if(!wmDataGlobal) { alert('透かしデータがありません。透かしを適用してから実行してください'); return; }
-  const w = canvas.width, h = canvas.height;
-  // get current image (watermarked)
-  const cur = ctx.getImageData(0,0,w,h);
-  const out = new ImageData(new Uint8ClampedArray(cur.data), w, h);
-  let diffSum = 0;
-  const method = document.getElementById('removeMethod').value;
-  if(method === 'simple'){
-        for(let y=0;y<h;y++){
-      const gy = (y/(h-1));
-      const gradFactor = (gy - 0.5) * 2 * parseFloat(document.getElementById('gradStrength').value);
-      for(let x=0;x<w;x++){
-        const i = (y*w + x)*4;
-        const rwm = wmDataGlobal.data[i]/255;
-        const gwm = wmDataGlobal.data[i+1]/255;
-        const bwm = wmDataGlobal.data[i+2]/255;
-        const awm = wmDataGlobal.data[i+3]/255;
-            if(awm < parseFloat(alphaSlider.value)) continue;
-            // skip subtraction on white (blown) areas if enabled
-            if(skipWhite && skipWhite.checked){
-              const thr = parseInt(whiteThreshold.value, 10);
-              const or = originalBaseImageData.data[i];
-              const og = originalBaseImageData.data[i+1];
-              const ob = originalBaseImageData.data[i+2];
-              if(or >= thr && og >= thr && ob >= thr) continue;
-            }
-        const wmLum = (0.299*rwm + 0.587*gwm + 0.114*bwm) * awm;
-        const wmStrength = parseFloat(document.getElementById('wmStrength').value);
-        const deltaEst = (wmLum * (1 + gradFactor)) * wmStrength; // estimate without noise
-        // subtract estimated delta
-        out.data[i  ] = Math.max(0, Math.min(255, out.data[i  ] - deltaEst*255));
-        out.data[i+1] = Math.max(0, Math.min(255, out.data[i+1] - deltaEst*255));
-        out.data[i+2] = Math.max(0, Math.min(255, out.data[i+2] - deltaEst*255));
-      }
-    }
-  } else if(method === 'ls'){
-    // LS (correlation) estimate of watermark strength r
-    // Compute numerator = sum(M * D) and denom = sum(M*M)
-    let numer = 0, denom = 0;
-    // D = I_watermarked - I_original
-    for(let y=0;y<h;y++){
-      const gy = (y/(h-1));
-      const gradFactor = (gy - 0.5) * 2 * parseFloat(document.getElementById('gradStrength').value);
-      for(let x=0;x<w;x++){
-        const i = (y*w + x)*4;
-        const rwm = wmDataGlobal.data[i]/255;
-        const gwm = wmDataGlobal.data[i+1]/255;
-        const bwm = wmDataGlobal.data[i+2]/255;
-        const awm = wmDataGlobal.data[i+3]/255;
-        if(awm < parseFloat(alphaSlider.value)) continue;
-        // skip subtraction on white (blown) areas if enabled
-        if(skipWhite && skipWhite.checked){
-          const thr = parseInt(whiteThreshold.value, 10);
-          const or = originalBaseImageData.data[i];
-          const og = originalBaseImageData.data[i+1];
-          const ob = originalBaseImageData.data[i+2];
-          if(or >= thr && og >= thr && ob >= thr) continue;
+  showLoading();
+  await yieldFrame();
+  try{
+    const w = canvas.width, h = canvas.height;
+    // get current image (watermarked)
+    const cur = ctx.getImageData(0,0,w,h);
+    const out = new ImageData(new Uint8ClampedArray(cur.data), w, h);
+    let diffSum = 0;
+    const method = document.getElementById('removeMethod').value;
+    if(method === 'simple'){
+      for(let y=0;y<h;y++){
+        if((y & 31) === 0) await yieldFrame();
+        const gy = (y/(h-1));
+        const gradFactor = (gy - 0.5) * 2 * parseFloat(document.getElementById('gradStrength').value);
+        for(let x=0;x<w;x++){
+          const i = (y*w + x)*4;
+          const rwm = wmDataGlobal.data[i]/255;
+          const gwm = wmDataGlobal.data[i+1]/255;
+          const bwm = wmDataGlobal.data[i+2]/255;
+          const awm = wmDataGlobal.data[i+3]/255;
+          if(awm < parseFloat(alphaSlider.value)) continue;
+          // skip subtraction on white (blown) areas if enabled
+          if(skipWhite && skipWhite.checked){
+            const thr = parseInt(whiteThreshold.value, 10);
+            const or = originalBaseImageData.data[i];
+            const og = originalBaseImageData.data[i+1];
+            const ob = originalBaseImageData.data[i+2];
+            if(or >= thr && og >= thr && ob >= thr) continue;
+          }
+          const wmLum = (0.299*rwm + 0.587*gwm + 0.114*bwm) * awm;
+          const wmStrength = parseFloat(document.getElementById('wmStrength').value);
+          const deltaEst = (wmLum * (1 + gradFactor)) * wmStrength; // estimate without noise
+          // subtract estimated delta
+          out.data[i  ] = Math.max(0, Math.min(255, out.data[i  ] - deltaEst*255));
+          out.data[i+1] = Math.max(0, Math.min(255, out.data[i+1] - deltaEst*255));
+          out.data[i+2] = Math.max(0, Math.min(255, out.data[i+2] - deltaEst*255));
         }
-        const wmLum = (0.299*rwm + 0.587*gwm + 0.114*bwm) * awm;
-        const M = (wmLum * (1 + gradFactor));
-        const D = (cur.data[i] - originalBaseImageData.data[i]) / 255.0; // normalize
-        numer += M * D;
-        denom += M * M;
       }
-    }
-    const r = denom === 0 ? 0 : numer / denom; // estimated strength
-    // subtract r * M
-    for(let y=0;y<h;y++){
-      const gy = (y/(h-1));
-      const gradFactor = (gy - 0.5) * 2 * parseFloat(document.getElementById('gradStrength').value);
-      for(let x=0;x<w;x++){
-        const i = (y*w + x)*4;
-        const rwm = wmDataGlobal.data[i]/255;
-        const gwm = wmDataGlobal.data[i+1]/255;
-        const bwm = wmDataGlobal.data[i+2]/255;
-        const awm = wmDataGlobal.data[i+3]/255;
-        if(awm < parseFloat(alphaSlider.value)) continue;
-        const wmLum = (0.299*rwm + 0.587*gwm + 0.114*bwm) * awm;
-        const M = (wmLum * (1 + gradFactor));
-        const delta = r * M;
-        out.data[i  ] = Math.max(0, Math.min(255, out.data[i  ] - delta*255));
-        out.data[i+1] = Math.max(0, Math.min(255, out.data[i+1] - delta*255));
-        out.data[i+2] = Math.max(0, Math.min(255, out.data[i+2] - delta*255));
+    } else if(method === 'ls'){
+      // LS (correlation) estimate of watermark strength r
+      // Compute numerator = sum(M * D) and denom = sum(M*M)
+      let numer = 0, denom = 0;
+      // D = I_watermarked - I_original
+      for(let y=0;y<h;y++){
+        if((y & 31) === 0) await yieldFrame();
+        const gy = (y/(h-1));
+        const gradFactor = (gy - 0.5) * 2 * parseFloat(document.getElementById('gradStrength').value);
+        for(let x=0;x<w;x++){
+          const i = (y*w + x)*4;
+          const rwm = wmDataGlobal.data[i]/255;
+          const gwm = wmDataGlobal.data[i+1]/255;
+          const bwm = wmDataGlobal.data[i+2]/255;
+          const awm = wmDataGlobal.data[i+3]/255;
+          if(awm < parseFloat(alphaSlider.value)) continue;
+          // skip subtraction on white (blown) areas if enabled
+          if(skipWhite && skipWhite.checked){
+            const thr = parseInt(whiteThreshold.value, 10);
+            const or = originalBaseImageData.data[i];
+            const og = originalBaseImageData.data[i+1];
+            const ob = originalBaseImageData.data[i+2];
+            if(or >= thr && og >= thr && ob >= thr) continue;
+          }
+          const wmLum = (0.299*rwm + 0.587*gwm + 0.114*bwm) * awm;
+          const M = (wmLum * (1 + gradFactor));
+          const D = (cur.data[i] - originalBaseImageData.data[i]) / 255.0; // normalize
+          numer += M * D;
+          denom += M * M;
+        }
       }
+      const r = denom === 0 ? 0 : numer / denom; // estimated strength
+      // subtract r * M
+      for(let y=0;y<h;y++){
+        if((y & 31) === 0) await yieldFrame();
+        const gy = (y/(h-1));
+        const gradFactor = (gy - 0.5) * 2 * parseFloat(document.getElementById('gradStrength').value);
+        for(let x=0;x<w;x++){
+          const i = (y*w + x)*4;
+          const rwm = wmDataGlobal.data[i]/255;
+          const gwm = wmDataGlobal.data[i+1]/255;
+          const bwm = wmDataGlobal.data[i+2]/255;
+          const awm = wmDataGlobal.data[i+3]/255;
+          if(awm < parseFloat(alphaSlider.value)) continue;
+          const wmLum = (0.299*rwm + 0.587*gwm + 0.114*bwm) * awm;
+          const M = (wmLum * (1 + gradFactor));
+          const delta = r * M;
+          out.data[i  ] = Math.max(0, Math.min(255, out.data[i  ] - delta*255));
+          out.data[i+1] = Math.max(0, Math.min(255, out.data[i+1] - delta*255));
+          out.data[i+2] = Math.max(0, Math.min(255, out.data[i+2] - delta*255));
+        }
+      }
+      subtractResult.textContent = `LS est r=${r.toFixed(4)}`;
     }
-    subtractResult.textContent = `LS est r=${r.toFixed(4)}`;
+    // compute mean absolute error between originalBaseImageData and out
+    let total = 0; let cnt = 0;
+    for(let i=0;i<w*h*4;i+=4){
+      const dr = Math.abs(originalBaseImageData.data[i] - out.data[i]);
+      const dg = Math.abs(originalBaseImageData.data[i+1] - out.data[i+1]);
+      const db = Math.abs(originalBaseImageData.data[i+2] - out.data[i+2]);
+      total += (dr+dg+db)/3; cnt++;
+    }
+    const mae = total / cnt;
+    subtractResult.textContent = `MAE: ${mae.toFixed(2)} (小さいほど元に戻せている)`;
+    // show output in preview
+    previewCanvas.width = w; previewCanvas.height = h;
+    previewCanvas.getContext('2d').putImageData(out,0,0);
+    if(!previewAdded){ canvas.parentNode.appendChild(previewCanvas); previewAdded = true; }
+  } finally {
+    hideLoading();
   }
-  // compute mean absolute error between originalBaseImageData and out
-  let total = 0; let cnt = 0;
-  for(let i=0;i<w*h*4;i+=4){
-    const dr = Math.abs(originalBaseImageData.data[i] - out.data[i]);
-    const dg = Math.abs(originalBaseImageData.data[i+1] - out.data[i+1]);
-    const db = Math.abs(originalBaseImageData.data[i+2] - out.data[i+2]);
-    total += (dr+dg+db)/3; cnt++;
-  }
-  const mae = total / cnt;
-  subtractResult.textContent = `MAE: ${mae.toFixed(2)} (小さいほど元に戻せている)`;
-  // show output in preview
-  previewCanvas.width = w; previewCanvas.height = h;
-  previewCanvas.getContext('2d').putImageData(out,0,0);
-  if(!previewAdded){ canvas.parentNode.appendChild(previewCanvas); previewAdded = true; }
 });
 
 let baseImg = null;
@@ -250,90 +264,96 @@ function generateNoise(width, height){
 // global watermark image data (full-canvas sized ImageData)
 let wmDataGlobal = null;
 
-applyBtn.addEventListener('click', () => {
+applyBtn.addEventListener('click', async () => {
   if(!baseImg){ alert('元画像を選択してください'); return; }
   if(!wmImg){ alert('透かし画像を選択してください'); return; }
-  // set canvas to base image size
-  canvas.width = baseImg.naturalWidth || baseImg.width;
-  canvas.height = baseImg.naturalHeight || baseImg.height;
-  ctx.clearRect(0,0,canvas.width, canvas.height);
-  ctx.drawImage(baseImg, 0, 0, canvas.width, canvas.height);
-  // save original image data for subtraction tests
-  originalBaseImageData = ctx.getImageData(0,0,canvas.width, canvas.height);
+  showLoading();
+  await yieldFrame();
+  try{
+    // set canvas to base image size
+    canvas.width = baseImg.naturalWidth || baseImg.width;
+    canvas.height = baseImg.naturalHeight || baseImg.height;
+    ctx.clearRect(0,0,canvas.width, canvas.height);
+    ctx.drawImage(baseImg, 0, 0, canvas.width, canvas.height);
+    // save original image data for subtraction tests
+    originalBaseImageData = ctx.getImageData(0,0,canvas.width, canvas.height);
 
-  // prepare watermark image drawn onto an offscreen canvas the same size as base
-  const off = document.createElement('canvas');
-  off.width = canvas.width; off.height = canvas.height;
-  const octx = off.getContext('2d');
-  octx.clearRect(0,0,off.width, off.height);
+    // prepare watermark image drawn onto an offscreen canvas the same size as base
+    const off = document.createElement('canvas');
+    off.width = canvas.width; off.height = canvas.height;
+    const octx = off.getContext('2d');
+    octx.clearRect(0,0,off.width, off.height);
 
-  // compute scale and position
-  const scalePct = parseFloat(wmScale.value) / 100.0;
-  let drawW = Math.round(wmImg.naturalWidth * scalePct);
-  let drawH = Math.round(wmImg.naturalHeight * scalePct);
-  // if auto, downscale to fit inside base without upscaling unless >100%
-  if(wmAuto.checked){
-    const maxW = Math.round(canvas.width * 0.9);
-    const maxH = Math.round(canvas.height * 0.9);
-    const fit = Math.min(maxW / wmImg.naturalWidth, maxH / wmImg.naturalHeight, 1.0);
-    drawW = Math.round(wmImg.naturalWidth * fit * (parseFloat(wmScale.value) / 100.0));
-    drawH = Math.round(wmImg.naturalHeight * fit * (parseFloat(wmScale.value) / 100.0));
-  }
-
-  // position
-  let dx = 0, dy = 0;
-  const pos = wmPos.value;
-  if(pos === 'center'){
-    dx = Math.round((canvas.width - drawW) / 2);
-    dy = Math.round((canvas.height - drawH) / 2);
-  } else if(pos === 'top-left'){
-    dx = 0; dy = 0;
-  } else if(pos === 'top-right'){
-    dx = canvas.width - drawW; dy = 0;
-  } else if(pos === 'bottom-left'){
-    dx = 0; dy = canvas.height - drawH;
-  } else if(pos === 'bottom-right'){
-    dx = canvas.width - drawW; dy = canvas.height - drawH;
-  }
-
-  // draw watermark onto offscreen and read its pixels into wmDataGlobal
-  octx.drawImage(wmImg, dx, dy, drawW, drawH);
-  wmDataGlobal = octx.getImageData(0,0,off.width, off.height);
-
-  // apply watermark (additive noise + luminance mask)
-  const w = canvas.width, h = canvas.height;
-  const data = ctx.getImageData(0,0,w,h);
-  const noise = generateNoise(w,h);
-  const wmStrengthVal = parseFloat(document.getElementById('wmStrength').value);
-  const noiseStrengthVal = parseFloat(document.getElementById('noiseStrength').value);
-  const gradStrengthVal = parseFloat(document.getElementById('gradStrength').value);
-  const alphaThr = parseFloat(alphaSlider.value);
-
-  for(let y=0;y<h;y++){
-    const gy = (y/(h-1));
-    const gradFactor = (gy - 0.5) * 2 * gradStrengthVal;
-    for(let x=0;x<w;x++){
-      const i = (y*w + x)*4;
-      const rwm = wmDataGlobal.data[i] / 255;
-      const gwm = wmDataGlobal.data[i+1] / 255;
-      const bwm = wmDataGlobal.data[i+2] / 255;
-      const awm = wmDataGlobal.data[i+3] / 255;
-      if(awm < alphaThr) continue; // respect transparency
-      const wmLum = (0.299*rwm + 0.587*gwm + 0.114*bwm) * awm;
-      const noiseVal = noise[y*w + x];
-      const delta = (wmLum * (1 + gradFactor)) * wmStrengthVal + noiseVal * noiseStrengthVal;
-      // add delta to RGB channels
-      data.data[i  ] = Math.max(0, Math.min(255, data.data[i  ] + delta*255));
-      data.data[i+1] = Math.max(0, Math.min(255, data.data[i+1] + delta*255));
-      data.data[i+2] = Math.max(0, Math.min(255, data.data[i+2] + delta*255));
+    // compute scale and position
+    const scalePct = parseFloat(wmScale.value) / 100.0;
+    let drawW = Math.round(wmImg.naturalWidth * scalePct);
+    let drawH = Math.round(wmImg.naturalHeight * scalePct);
+    // if auto, downscale to fit inside base without upscaling unless >100%
+    if(wmAuto.checked){
+      const maxW = Math.round(canvas.width * 0.9);
+      const maxH = Math.round(canvas.height * 0.9);
+      const fit = Math.min(maxW / wmImg.naturalWidth, maxH / wmImg.naturalHeight, 1.0);
+      drawW = Math.round(wmImg.naturalWidth * fit * (parseFloat(wmScale.value) / 100.0));
+      drawH = Math.round(wmImg.naturalHeight * fit * (parseFloat(wmScale.value) / 100.0));
     }
+
+    // position
+    let dx = 0, dy = 0;
+    const pos = wmPos.value;
+    if(pos === 'center'){
+      dx = Math.round((canvas.width - drawW) / 2);
+      dy = Math.round((canvas.height - drawH) / 2);
+    } else if(pos === 'top-left'){
+      dx = 0; dy = 0;
+    } else if(pos === 'top-right'){
+      dx = canvas.width - drawW; dy = 0;
+    } else if(pos === 'bottom-left'){
+      dx = 0; dy = canvas.height - drawH;
+    } else if(pos === 'bottom-right'){
+      dx = canvas.width - drawW; dy = canvas.height - drawH;
+    }
+
+    // draw watermark onto offscreen and read its pixels into wmDataGlobal
+    octx.drawImage(wmImg, dx, dy, drawW, drawH);
+    wmDataGlobal = octx.getImageData(0,0,off.width, off.height);
+
+    // apply watermark (additive noise + luminance mask)
+    const w = canvas.width, h = canvas.height;
+    const data = ctx.getImageData(0,0,w,h);
+    const noise = generateNoise(w,h);
+    const wmStrengthVal = parseFloat(document.getElementById('wmStrength').value);
+    const noiseStrengthVal = parseFloat(document.getElementById('noiseStrength').value);
+    const gradStrengthVal = parseFloat(document.getElementById('gradStrength').value);
+    const alphaThr = parseFloat(alphaSlider.value);
+
+    for(let y=0;y<h;y++){
+      if((y & 31) === 0) await yieldFrame();
+      const gy = (y/(h-1));
+      const gradFactor = (gy - 0.5) * 2 * gradStrengthVal;
+      for(let x=0;x<w;x++){
+        const i = (y*w + x)*4;
+        const rwm = wmDataGlobal.data[i] / 255;
+        const gwm = wmDataGlobal.data[i+1] / 255;
+        const bwm = wmDataGlobal.data[i+2] / 255;
+        const awm = wmDataGlobal.data[i+3] / 255;
+        if(awm < alphaThr) continue; // respect transparency
+        const wmLum = (0.299*rwm + 0.587*gwm + 0.114*bwm) * awm;
+        const noiseVal = noise[y*w + x];
+        const delta = (wmLum * (1 + gradFactor)) * wmStrengthVal + noiseVal * noiseStrengthVal;
+        // add delta to RGB channels
+        data.data[i  ] = Math.max(0, Math.min(255, data.data[i  ] + delta*255));
+        data.data[i+1] = Math.max(0, Math.min(255, data.data[i+1] + delta*255));
+        data.data[i+2] = Math.max(0, Math.min(255, data.data[i+2] + delta*255));
+      }
+    }
+    ctx.putImageData(data, 0, 0);
+    // ensure preview canvas reflects latest
+    if(!previewAdded){ canvas.parentNode.appendChild(previewCanvas); previewAdded = true; }
+    previewCanvas.width = w; previewCanvas.height = h;
+    previewCanvas.getContext('2d').putImageData(ctx.getImageData(0,0,w,h),0,0);
+  } finally {
+    hideLoading();
   }
-  ctx.putImageData(data, 0, 0);
-  // ensure preview canvas reflects latest
-  if(!previewAdded){ canvas.parentNode.appendChild(previewCanvas); previewAdded = true; }
-  previewCanvas.width = w; previewCanvas.height = h;
-  previewCanvas.getContext('2d').putImageData(ctx.getImageData(0,0,w,h),0,0);
-  alert('透かしを適用しました。減算テストのために「ノイズ無視で減算テスト」を使ってください。');
 });
 
 downloadBtn.addEventListener('click', () => {
