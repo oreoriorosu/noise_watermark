@@ -20,14 +20,13 @@
   <label>ノイズ強度: <input id="noiseStrength" type="range" min="0" max="0.5" step="0.01" value="0.05"></label>
   <label>勾配量: <input id="gradStrength" type="range" min="0" max="1" step="0.01" value="0.4"></label>
   <label>アルファ閾値: <input id="alphaThreshold" type="range" min="0" max="1" step="0.01" value="0.05"> <span id="alphaValue">0.05</span></label>
+  <label>透かしサイズ (%): <input id="wmScale" type="range" min="1" max="100" step="1" value="100"> <span id="wmScaleValue">100</span> <label style="margin-left:8px"><input id="wmAuto" type="checkbox" checked> 自動</label></label>
+  <label>位置: <select id="wmPos"><option value="center">中央</option><option value="top-left">左上</option><option value="top-right">右上</option><option value="bottom-left">左下</option><option value="bottom-right">右下</option></select></label>
   <button id="applyBtn">透かしを適用</button>
   <button id="downloadBtn">結果をダウンロード</button>
 
-  <label style="margin-top:12px"><input type="checkbox" id="devMode"> 開発モードを表示</label>
-  <div id="devControls" style="display:none; border:1px dashed #ccc; padding:8px; margin-top:8px">
-    <strong>開発用設定</strong>
-    <label>透かしサイズ (%): <input id="wmScale" type="range" min="1" max="100" step="1" value="100"> <span id="wmScaleValue">100</span> <label style="margin-left:8px"><input id="wmAuto" type="checkbox" checked> 自動</label></label>
-    <label>位置: <select id="wmPos"><option value="center">中央</option><option value="top-left">左上</option><option value="top-right">右上</option><option value="bottom-left">左下</option><option value="bottom-right">右下</option></select></label>
+  <div id="devControls" style="display:block; border:1px dashed #ccc; padding:8px; margin-top:8px">
+    <strong>開発用設定（常時表示）</strong>
     <div style="margin-top:8px">
       <button id="previewMaskBtn">透かしマスクをプレビュー</button>
       <button id="subtractBtn">ノイズ無視で減算テスト</button>
