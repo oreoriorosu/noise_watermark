@@ -51,7 +51,6 @@ const alphaValue = document.getElementById('alphaValue');
 // 表示を初期化
 alphaValue.textContent = alphaSlider.value;
 alphaSlider.addEventListener('input', () => { alphaValue.textContent = alphaSlider.value; });
-const devMode = document.getElementById('devMode');
 const devControls = document.getElementById('devControls');
 const wmScale = document.getElementById('wmScale');
 const wmScaleValue = document.getElementById('wmScaleValue');
@@ -63,7 +62,6 @@ const subtractResult = document.getElementById('subtractResult');
 
 wmScaleValue.textContent = wmScale.value;
 wmScale.addEventListener('input', () => { wmScaleValue.textContent = wmScale.value; });
-devMode.addEventListener('change', () => { devControls.style.display = devMode.checked ? 'block' : 'none'; });
 
 // For debug/test: store original base pixel data so subtract test can compare
 let originalBaseImageData = null;
