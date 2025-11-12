@@ -19,6 +19,7 @@
   <label>透かし強度: <input id="wmStrength" type="range" min="0" max="1" step="0.01" value="0.12"></label>
   <label>ノイズ強度: <input id="noiseStrength" type="range" min="0" max="0.5" step="0.01" value="0.05"></label>
   <label>勾配量: <input id="gradStrength" type="range" min="0" max="1" step="0.01" value="0.4"></label>
+  <label>アルファ閾値: <input id="alphaThreshold" type="range" min="0" max="1" step="0.01" value="0.05"> <span id="alphaValue">0.05</span></label>
   <button id="applyBtn">透かしを適用</button>
   <button id="downloadBtn">結果をダウンロード</button>
 </div>
@@ -32,6 +33,12 @@ const applyBtn = document.getElementById('applyBtn');
 const downloadBtn = document.getElementById('downloadBtn');
 const canvas = document.getElementById('outCanvas');
 const ctx = canvas.getContext('2d');
+const alphaSlider = document.getElementById('alphaThreshold');
+const alphaValue = document.getElementById('alphaValue');
+
+// 表示を初期化
+alphaValue.textContent = alphaSlider.value;
+alphaSlider.addEventListener('input', () => { alphaValue.textContent = alphaSlider.value; });
 
 let baseImg = null;
 let wmImg = null;
@@ -64,6 +71,7 @@ function applyWatermark() {
   const wmStrength = parseFloat(document.getElementById('wmStrength').value);
   const noiseStrength = parseFloat(document.getElementById('noiseStrength').value);
   const gradStrength = parseFloat(document.getElementById('gradStrength').value);
+  const alphaThreshold = parseFloat(document.getElementById('alphaThreshold').value);
 
   canvas.width = baseImg.width;
   canvas.height = baseImg.height;
@@ -110,8 +118,8 @@ function applyWatermark() {
   const gwm = wmData.data[i+1]/255;
   const bwm = wmData.data[i+2]/255;
   const awm = wmData.data[i+3]/255; // 透過（アルファ）を反映
-  // 透過部分は処理しない（閾値でスキップ）
-  if (awm < 0.01) continue;
+  // 透過部分は処理しない（UIで調整可能な閾値でスキップ）
+  if (awm < alphaThreshold) continue;
   const wmLum = (0.299*rwm + 0.587*gwm + 0.114*bwm) * awm;
   const n = noise[y*w + x];
   // ノイズもアルファに依存させ、透過部にはノイズが乗らないようにする
