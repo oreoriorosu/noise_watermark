@@ -22,6 +22,18 @@
   <label>アルファ閾値: <input id="alphaThreshold" type="range" min="0" max="1" step="0.01" value="0.05"> <span id="alphaValue">0.05</span></label>
   <button id="applyBtn">透かしを適用</button>
   <button id="downloadBtn">結果をダウンロード</button>
+
+  <label style="margin-top:12px"><input type="checkbox" id="devMode"> 開発モードを表示</label>
+  <div id="devControls" style="display:none; border:1px dashed #ccc; padding:8px; margin-top:8px">
+    <strong>開発用設定</strong>
+    <label>透かしサイズ (%): <input id="wmScale" type="range" min="1" max="100" step="1" value="100"> <span id="wmScaleValue">100</span> <label style="margin-left:8px"><input id="wmAuto" type="checkbox" checked> 自動</label></label>
+    <label>位置: <select id="wmPos"><option value="center">中央</option><option value="top-left">左上</option><option value="top-right">右上</option><option value="bottom-left">左下</option><option value="bottom-right">右下</option></select></label>
+    <div style="margin-top:8px">
+      <button id="previewMaskBtn">透かしマスクをプレビュー</button>
+      <button id="subtractBtn">ノイズ無視で減算テスト</button>
+      <span id="subtractResult" style="margin-left:8px"></span>
+    </div>
+  </div>
 </div>
 
 <canvas id="outCanvas"></canvas>
@@ -39,6 +51,87 @@ const alphaValue = document.getElementById('alphaValue');
 // 表示を初期化
 alphaValue.textContent = alphaSlider.value;
 alphaSlider.addEventListener('input', () => { alphaValue.textContent = alphaSlider.value; });
+const devMode = document.getElementById('devMode');
+const devControls = document.getElementById('devControls');
+const wmScale = document.getElementById('wmScale');
+const wmScaleValue = document.getElementById('wmScaleValue');
+const wmAuto = document.getElementById('wmAuto');
+const wmPos = document.getElementById('wmPos');
+const previewMaskBtn = document.getElementById('previewMaskBtn');
+const subtractBtn = document.getElementById('subtractBtn');
+const subtractResult = document.getElementById('subtractResult');
+
+wmScaleValue.textContent = wmScale.value;
+wmScale.addEventListener('input', () => { wmScaleValue.textContent = wmScale.value; });
+devMode.addEventListener('change', () => { devControls.style.display = devMode.checked ? 'block' : 'none'; });
+
+// For debug/test: store original base pixel data so subtract test can compare
+let originalBaseImageData = null;
+// small preview canvas for mask/subtraction results
+const previewCanvas = document.createElement('canvas');
+previewCanvas.style.maxWidth = '100%';
+previewCanvas.style.display = 'block';
+previewCanvas.style.marginTop = '8px';
+let previewAdded = false;
+
+previewMaskBtn.addEventListener('click', () => {
+  if(!wmDataGlobal) { alert('まず透かしを適用して透かしデータを生成してください'); return; }
+  // show alpha mask in preview canvas
+  const w = canvas.width, h = canvas.height;
+  previewCanvas.width = w; previewCanvas.height = h;
+  const pctx = previewCanvas.getContext('2d');
+  const mask = pctx.createImageData(w,h);
+  for(let i=0;i<w*h;i++){
+    const si = i*4;
+    const a = wmDataGlobal.data[si+3];
+    mask.data[si] = a; mask.data[si+1] = a; mask.data[si+2] = a; mask.data[si+3] = 255;
+  }
+  pctx.putImageData(mask,0,0);
+  if(!previewAdded){ canvas.parentNode.appendChild(previewCanvas); previewAdded = true; }
+});
+
+subtractBtn.addEventListener('click', () => {
+  if(!originalBaseImageData) { alert('まず「透かしを適用」して元画像データを保存してください'); return; }
+  if(!wmDataGlobal) { alert('透かしデータがありません。透かしを適用してから実行してください'); return; }
+  const w = canvas.width, h = canvas.height;
+  // get current image (watermarked)
+  const cur = ctx.getImageData(0,0,w,h);
+  const out = new ImageData(new Uint8ClampedArray(cur.data), w, h);
+  let diffSum = 0;
+  for(let y=0;y<h;y++){
+    const gy = (y/(h-1));
+    const gradFactor = (gy - 0.5) * 2 * parseFloat(document.getElementById('gradStrength').value);
+    for(let x=0;x<w;x++){
+      const i = (y*w + x)*4;
+      const rwm = wmDataGlobal.data[i]/255;
+      const gwm = wmDataGlobal.data[i+1]/255;
+      const bwm = wmDataGlobal.data[i+2]/255;
+      const awm = wmDataGlobal.data[i+3]/255;
+      if(awm < parseFloat(alphaSlider.value)) continue;
+      const wmLum = (0.299*rwm + 0.587*gwm + 0.114*bwm) * awm;
+      const wmStrength = parseFloat(document.getElementById('wmStrength').value);
+      const deltaEst = (wmLum * (1 + gradFactor)) * wmStrength; // estimate without noise
+      // subtract estimated delta
+      out.data[i  ] = Math.max(0, Math.min(255, out.data[i  ] - deltaEst*255));
+      out.data[i+1] = Math.max(0, Math.min(255, out.data[i+1] - deltaEst*255));
+      out.data[i+2] = Math.max(0, Math.min(255, out.data[i+2] - deltaEst*255));
+    }
+  }
+  // compute mean absolute error between originalBaseImageData and out
+  let total = 0; let cnt = 0;
+  for(let i=0;i<w*h*4;i+=4){
+    const dr = Math.abs(originalBaseImageData.data[i] - out.data[i]);
+    const dg = Math.abs(originalBaseImageData.data[i+1] - out.data[i+1]);
+    const db = Math.abs(originalBaseImageData.data[i+2] - out.data[i+2]);
+    total += (dr+dg+db)/3; cnt++;
+  }
+  const mae = total / cnt;
+  subtractResult.textContent = `MAE: ${mae.toFixed(2)} (小さいほど元に戻せている)`;
+  // show output in preview
+  previewCanvas.width = w; previewCanvas.height = h;
+  previewCanvas.getContext('2d').putImageData(out,0,0);
+  if(!previewAdded){ canvas.parentNode.appendChild(previewCanvas); previewAdded = true; }
+});
 
 let baseImg = null;
 let wmImg = null;
@@ -78,20 +171,35 @@ function applyWatermark() {
   ctx.drawImage(baseImg, 0, 0);
 
   const baseData = ctx.getImageData(0,0,canvas.width,canvas.height);
+  // save original base image data for subtract test
+  originalBaseImageData = ctx.getImageData(0,0,canvas.width,canvas.height);
   const w = canvas.width, h = canvas.height;
 
   let wmCanvas = document.createElement('canvas');
   wmCanvas.width = w; wmCanvas.height = h;
   let wctx = wmCanvas.getContext('2d');
   if(wmImg) {
-    // 透かし画像は拡大せず、必要なら縮小してアスペクト比を保持したまま中央に描画
+    // 透かし画像のサイズ/位置を dev UI に従って決定（デフォルトは自動縮小して中央）
     const srcW = wmImg.width;
     const srcH = wmImg.height;
-    const scale = Math.min(1, w / srcW, h / srcH); // 上限1: 拡大しない
+    let scale = 1;
+    if(wmAuto && wmAuto.checked){
+      scale = Math.min(1, w / srcW, h / srcH); // 自動: 拡大しないで収まる最大値
+    } else if(wmScale){
+      scale = Math.min(1, parseFloat(wmScale.value) / 100);
+    }
     const drawW = Math.round(srcW * scale);
     const drawH = Math.round(srcH * scale);
-    const dx = Math.floor((w - drawW) / 2);
-    const dy = Math.floor((h - drawH) / 2);
+    let dx = Math.floor((w - drawW) / 2);
+    let dy = Math.floor((h - drawH) / 2);
+    if(wmPos){
+      const pos = wmPos.value || 'center';
+      if(pos === 'top-left'){ dx = 0; dy = 0; }
+      else if(pos === 'top-right'){ dx = w - drawW; dy = 0; }
+      else if(pos === 'bottom-left'){ dx = 0; dy = h - drawH; }
+      else if(pos === 'bottom-right'){ dx = w - drawW; dy = h - drawH; }
+      // center is default
+    }
     wctx.clearRect(0,0,w,h);
     wctx.drawImage(wmImg, dx, dy, drawW, drawH);
   }
@@ -106,6 +214,8 @@ function applyWatermark() {
     wctx.globalAlpha = 1;
   }
   const wmData = wctx.getImageData(0,0,w,h);
+  // expose watermark data for dev tools (preview/subtract)
+  window.wmDataGlobal = wmData;
   const noise = generateNoise(w,h);
   const out = baseData;
 
