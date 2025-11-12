@@ -110,9 +110,12 @@ function applyWatermark() {
   const gwm = wmData.data[i+1]/255;
   const bwm = wmData.data[i+2]/255;
   const awm = wmData.data[i+3]/255; // 透過（アルファ）を反映
+  // 透過部分は処理しない（閾値でスキップ）
+  if (awm < 0.01) continue;
   const wmLum = (0.299*rwm + 0.587*gwm + 0.114*bwm) * awm;
-      const n = noise[y*w + x];
-      const delta = (wmLum * (1 + gradFactor) + n * noiseStrength) * wmStrength;
+  const n = noise[y*w + x];
+  // ノイズもアルファに依存させ、透過部にはノイズが乗らないようにする
+  const delta = (wmLum * (1 + gradFactor) + n * noiseStrength * awm) * wmStrength;
       out.data[i  ] = Math.max(0, Math.min(255, out.data[i  ] + delta * 255));
       out.data[i+1] = Math.max(0, Math.min(255, out.data[i+1] + delta * 255));
       out.data[i+2] = Math.max(0, Math.min(255, out.data[i+2] + delta * 255));
